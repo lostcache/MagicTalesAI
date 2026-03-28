@@ -18,8 +18,10 @@ from .storage import (
 )
 from .tts_generator import generate_segment_audio
 from .voice_assigner import assign_voices
+from .live_ws import router as live_ws_router
 
 app = FastAPI(title="MagicTales-AI", version="0.1.0")
+app.include_router(live_ws_router)
 
 app.add_middleware(
     CORSMiddleware,
