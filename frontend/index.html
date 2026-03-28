@@ -445,6 +445,13 @@
                oninput="document.getElementById('bgm-player').volume = this.value/100">
         <span id="bgm-emotion" style="font-size:0.7rem; color:#9b59f5; font-style:italic;"></span>
       </div>
+      <div id="live-qa-panel" style="display:none; margin-top:16px; padding:12px 14px; background:#f0ebff; border-radius:10px; border:1px solid #e9e0ff;">
+        <div style="font-weight:600; margin-bottom:6px; color:#4a30b0;">Live Q&amp;A (Gemini + your mic)</div>
+        <p style="font-size:0.8rem; color:#6b7280; margin:0 0 10px 0; line-height:1.4;">
+          Starts automatically when you press ▶ Play Story. Same story context as Step 2–3; the child can interrupt anytime; use headphones to reduce echo. Speaking pauses the audiobook.
+        </p>
+        <div class="msg" id="msg-live-qa" style="margin-top:8px;"></div>
+      </div>
     </div>
   </div>
 
@@ -510,6 +517,7 @@
         // Step 4: unlock play
         setStepState('step-play', 'active');
         document.getElementById('btn-play').disabled = false;
+        document.getElementById('live-qa-panel').style.display = 'block';
 
         if (data.has_audio) {
           const player = document.getElementById('audio-player');
@@ -732,6 +740,7 @@
       document.getElementById('btn-play').disabled = false;
       document.getElementById('btn-regen').style.display = 'inline-flex';
       document.getElementById('btn-regen').disabled = false;
+      document.getElementById('live-qa-panel').style.display = 'block';
       setupPlayerEnded();
     } catch (e) {
       setMsg('msg-voices', `Error: ${e.message}`, 'error');
@@ -851,6 +860,8 @@
           }
         } else {
           stopBGM();
+          _liveQaPausedAudiobook = false;
+          stopLiveQA(true);
           setMsg('msg-play', 'Finished story.', 'done');
           setStatus('st-play', 'Done', 'done');
           document.getElementById('btn-play').disabled = false;
@@ -864,7 +875,10 @@
     if (!S.storyId) return;
     const btnPlay = document.getElementById('btn-play');
     const btnRegen = document.getElementById('btn-regen');
-    
+
+    _liveQaPausedAudiobook = false;
+    stopLiveQA(true);
+
     btnPlay.disabled = true;
     if (btnRegen) btnRegen.disabled = true;
 
@@ -919,12 +933,205 @@
         fetchSegment(S.currentSegment + 1, isRegen).catch(() => {});
       }
 
+      startLiveQA().catch((err) => {
+        setMsg('msg-live-qa', `Live Q&A: ${err.message || err}`, 'error');
+      });
+
     } catch (e) {
       setMsg('msg-play', `Error: ${e.message}`, 'error');
       setStatus('st-play', 'Error', 'error');
       btnPlay.disabled = false;
       if (btnRegen) btnRegen.disabled = false;
     }
+  }
+
+  // ── Step 4: Gemini Live Q&A (browser mic → backend WebSocket → real audio) ──
+  let _liveWs = null;
+  let _liveAudioCtx = null;
+  let _liveProc = null;
+  let _liveStream = null;
+  let _livePlayCtx = null;
+  let _liveNextPlayTime = 0;
+  let _liveHeardReply = false;
+  let _livePlaySources = [];
+  let _liveLastBargeIn = 0;
+  let _liveQaPausedAudiobook = false;
+  let _liveQaExpectClose = false;
+  const LIVE_MIC_SPEECH_RMS = 0.028;
+  const LIVE_BARGE_IN_COOLDOWN_MS = 80;
+
+  function flushLiveModelAudio() {
+    if (!_livePlayCtx) return;
+    const now = performance.now();
+    if (now - _liveLastBargeIn < LIVE_BARGE_IN_COOLDOWN_MS) return;
+    _liveLastBargeIn = now;
+    for (const s of _livePlaySources) {
+      try { s.stop(0); } catch (_) {}
+    }
+    _livePlaySources = [];
+    _liveNextPlayTime = _livePlayCtx.currentTime;
+  }
+
+  function maybePauseStoryForQA() {
+    const ap = document.getElementById('audio-player');
+    if (ap && !ap.paused) {
+      ap.pause();
+      _liveQaPausedAudiobook = true;
+    }
+    const bgm = document.getElementById('bgm-player');
+    if (bgm && !bgm.paused) bgm.pause();
+  }
+
+  function maybeBargeInFromMic(inputFloat32) {
+    let sum = 0;
+    for (let i = 0; i < inputFloat32.length; i++) sum += inputFloat32[i] * inputFloat32[i];
+    const rms = Math.sqrt(sum / inputFloat32.length);
+    if (rms < LIVE_MIC_SPEECH_RMS) return;
+    flushLiveModelAudio();
+    maybePauseStoryForQA();
+  }
+
+  function downsampleTo16kInt16(float32, inRate) {
+    const ratio = inRate / 16000;
+    const n = Math.floor(float32.length / ratio);
+    const out = new Int16Array(n);
+    for (let i = 0; i < n; i++) {
+      const j = Math.floor(i * ratio);
+      let s = Math.max(-1, Math.min(1, float32[j]));
+      out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    return out;
+  }
+
+  function stopLiveQA(silent) {
+    _liveQaExpectClose = true;
+    teardownLiveMediaOnly();
+    if (_liveWs) { try { _liveWs.close(); } catch (_) {} _liveWs = null; }
+    if (_liveQaPausedAudiobook) {
+      _liveQaPausedAudiobook = false;
+      const ap = document.getElementById('audio-player');
+      if (ap) ap.play().catch(() => {});
+    }
+    if (!silent) setMsg('msg-live-qa', 'Stopped.', 'success');
+  }
+
+  /** Called when ▶ Play Story successfully starts; no manual button. */
+  function startLiveQA() {
+    if (!S.storyId) return Promise.resolve();
+    if (_liveWs && _liveWs.readyState === WebSocket.OPEN) return Promise.resolve();
+
+    _liveHeardReply = false;
+    clearMsg('msg-live-qa');
+    setMsg('msg-live-qa', 'Connecting Live Q&A…', 'loading');
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/ws/stories/${S.storyId}/live`);
+    ws.binaryType = 'arraybuffer';
+    _liveWs = ws;
+    _liveQaExpectClose = false;
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const ok = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
+      const fail = (e) => {
+        if (!settled) {
+          settled = true;
+          reject(e);
+        }
+      };
+
+      ws.onopen = async () => {
+        try {
+          _liveStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          _liveAudioCtx = new AudioContext();
+          if (_liveAudioCtx.state === 'suspended') await _liveAudioCtx.resume();
+          const source = _liveAudioCtx.createMediaStreamSource(_liveStream);
+          _liveProc = _liveAudioCtx.createScriptProcessor(4096, 1, 1);
+          _liveProc.onaudioprocess = (e) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            const input = e.inputBuffer.getChannelData(0);
+            maybeBargeInFromMic(input);
+            const pcm = downsampleTo16kInt16(input, _liveAudioCtx.sampleRate);
+            ws.send(pcm.buffer);
+          };
+          const gain = _liveAudioCtx.createGain();
+          gain.gain.value = 0;
+          source.connect(_liveProc);
+          _liveProc.connect(gain);
+          gain.connect(_liveAudioCtx.destination);
+          try {
+            _livePlayCtx = new AudioContext({ sampleRate: 24000 });
+          } catch (_) {
+            _livePlayCtx = new AudioContext();
+          }
+          if (_livePlayCtx.state === 'suspended') await _livePlayCtx.resume();
+          _liveNextPlayTime = _livePlayCtx.currentTime;
+          setMsg('msg-live-qa', 'Listening — ask about the story.', 'success');
+          ok();
+        } catch (err) {
+          setMsg('msg-live-qa', `Mic error: ${err.message}`, 'error');
+          _liveQaExpectClose = true;
+          try { ws.close(); } catch (_) {}
+          fail(err);
+        }
+      };
+
+      ws.onmessage = (ev) => {
+        if (!(ev.data instanceof ArrayBuffer) || !_livePlayCtx) return;
+        if (!_liveHeardReply) {
+          _liveHeardReply = true;
+          setMsg('msg-live-qa', 'Playing reply…', 'success');
+        }
+        const pcm = new Int16Array(ev.data);
+        const rate = _livePlayCtx.sampleRate;
+        const buf = _livePlayCtx.createBuffer(1, pcm.length, rate);
+        const ch = buf.getChannelData(0);
+        for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+        const src = _livePlayCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(_livePlayCtx.destination);
+        _livePlaySources.push(src);
+        src.onended = () => {
+          const i = _livePlaySources.indexOf(src);
+          if (i >= 0) _livePlaySources.splice(i, 1);
+        };
+        const start = Math.max(_livePlayCtx.currentTime, _liveNextPlayTime);
+        src.start(start);
+        _liveNextPlayTime = start + buf.duration;
+      };
+
+      ws.onerror = () => {
+        setMsg('msg-live-qa', 'WebSocket error.', 'error');
+        fail(new Error('WebSocket error'));
+      };
+      ws.onclose = () => {
+        const wasOpen = _liveWs === ws;
+        _liveWs = null;
+        if (wasOpen && !_liveQaExpectClose) {
+          setMsg('msg-live-qa', 'Live Q&A disconnected.', 'error');
+        }
+        _liveQaExpectClose = false;
+        teardownLiveMediaOnly();
+      };
+    });
+  }
+
+  function teardownLiveMediaOnly() {
+    if (_liveProc) { try { _liveProc.disconnect(); } catch (_) {} _liveProc = null; }
+    if (_liveAudioCtx) { try { _liveAudioCtx.close(); } catch (_) {} _liveAudioCtx = null; }
+    if (_liveStream) { _liveStream.getTracks().forEach(t => t.stop()); _liveStream = null; }
+    if (_livePlayCtx) {
+      for (const s of _livePlaySources) { try { s.stop(0); } catch (_) {} }
+      _livePlaySources = [];
+      try { _livePlayCtx.close(); } catch (_) {} _livePlayCtx = null;
+    }
+    _liveNextPlayTime = 0;
   }
 </script>
 </body>

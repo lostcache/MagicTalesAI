@@ -1,9 +1,6 @@
 import asyncio
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from .audio_handler import AudioHandler
+from typing import Any
 
 
 class StoryState(Enum):
@@ -13,9 +10,9 @@ class StoryState(Enum):
 
 
 class StoryController:
-    """Coordinates narration vs QA: Gemini Live can barge in and pause ElevenLabs."""
+    """Coordinates Gemini Live QA state (barge-in, answering, back to listening)."""
 
-    def __init__(self, audio_handler: "AudioHandler", gemini: Any) -> None:
+    def __init__(self, audio_handler: Any, gemini: Any) -> None:
         self.audio_handler = audio_handler
         self.gemini = gemini
         self.state = StoryState.PLAYING_NARRATION
