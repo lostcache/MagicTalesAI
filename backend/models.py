@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -71,11 +71,24 @@ class CharacterVoiceAssignment(BaseModel):
     voice_name: GeminiVoice
     speaking_style: str = Field(description="Short phrase e.g. 'slow and menacing'")
     rationale: str = Field(description="One sentence explaining why this voice fits")
+    # Populated only when user overrides with an ElevenLabs cloned voice; None = use Gemini TTS
+    elevenlabs_voice_id: Optional[str] = Field(default=None)
 
 
 class VoiceAssignmentResult(BaseModel):
     """Used as Gemini response_schema for voice casting."""
     assignments: list[CharacterVoiceAssignment]
+
+
+class CloneVoiceResponse(BaseModel):
+    voice_id: str
+    requires_verification: bool
+    name: str
+
+
+class AssignCustomVoiceRequest(BaseModel):
+    character_name: str
+    elevenlabs_voice_id: str
 
 
 # ── Story session ─────────────────────────────────────────────────────────────
