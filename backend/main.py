@@ -1,10 +1,12 @@
 import asyncio
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from .elevenlabs_client import clone_voice
 from .file_extractor import extract_text_from_epub, extract_text_from_pdf
@@ -18,8 +20,24 @@ from .storage import (
 )
 from .tts_generator import generate_segment_audio
 from .voice_assigner import assign_voices
+from .live_ws import router as live_ws_router
+
+SPA_DIST = Path(__file__).resolve().parent.parent / "magictales-ai-stories" / "dist"
+
+
+def _spa_index() -> FileResponse | Response:
+    index = SPA_DIST / "index.html"
+    if not index.is_file():
+        return Response(
+            "Frontend not built. From repo root: cd magictales-ai-stories && npm install && npm run build\n",
+            media_type="text/plain",
+            status_code=503,
+        )
+    return FileResponse(index)
+
 
 app = FastAPI(title="MagicTales-AI", version="0.1.0")
+app.include_router(live_ws_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,8 +48,8 @@ app.add_middleware(
 
 
 @app.get("/")
-async def serve_frontend():
-    return FileResponse("frontend/index.html")
+async def serve_spa_root():
+    return _spa_index()
 
 
 @app.post("/api/upload-text")
@@ -211,3 +229,23 @@ async def list_stories_endpoint():
 @app.get("/api/stories/{story_id}")
 async def get_story(story_id: str):
     return await load_full_session(story_id)
+
+
+_assets_dir = SPA_DIST / "assets"
+if _assets_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=_assets_dir), name="spa_assets")
+
+
+@app.get("/{full_path:path}")
+async def serve_spa_or_static(full_path: str):
+    """Serve files from the Vite build (e.g. favicon) or SPA index for client-side routes."""
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not found")
+    candidate = (SPA_DIST / full_path).resolve()
+    try:
+        candidate.relative_to(SPA_DIST.resolve())
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not found") from None
+    if candidate.is_file():
+        return FileResponse(candidate)
+    return _spa_index()

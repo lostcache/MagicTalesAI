@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Play, Pause, SkipForward, SkipBack, Mic, MicOff, Loader2 } from "lucide-react";
+import { Play, Pause, SkipForward, SkipBack, Mic, MicOff, Loader2, Radio } from "lucide-react";
 import type { ProcessedStory } from "@/types/story";
+import { useLiveQA } from "@/hooks/useLiveQA";
 
 interface InteractivePlayerProps {
   story: ProcessedStory;
@@ -29,10 +30,17 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
 
   const audioEl = useRef<HTMLAudioElement | null>(null);
   const bgmEl = useRef<HTMLAudioElement | null>(null);
+  const liveQaStartedRef = useRef(false);
   const blobCache = useRef<Record<number, string>>({});
   const currentIndexRef = useRef(0);
   const stoppedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
+
+  const { liveQaStatus, liveQaDetail, startLiveQA, stopLiveQA } = useLiveQA({
+    storyId: story.story_id,
+    audiobookRef: audioEl,
+    bgmRef: bgmEl,
+  });
 
   const totalSegments = story.segments.length;
   const safeIndex = Math.max(0, Math.min(currentSegmentIndex, totalSegments - 1));
@@ -67,6 +75,8 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
   const playSegment = useCallback(async (index: number) => {
     if (stoppedRef.current) return;
     if (index >= totalSegments) {
+      liveQaStartedRef.current = false;
+      stopLiveQA(true);
       setIsPlaying(false);
       setIsFinished(true);
       setIsLoadingAudio(false);
@@ -96,6 +106,15 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
       const seg = story.segments[index];
       if (seg) setBgmEmotion(seg.emotion);
 
+      // Gemini Live Q&A (AI voice mode): mic → backend WebSocket → spoken reply
+      if (voiceMode === "ai" && !liveQaStartedRef.current) {
+        liveQaStartedRef.current = true;
+        void startLiveQA().catch((e) => {
+          liveQaStartedRef.current = false;
+          console.error("Live Q&A:", e);
+        });
+      }
+
       // Pre-fetch next
       if (index + 1 < totalSegments) {
         fetchSegment(index + 1).catch(() => {});
@@ -109,7 +128,16 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
       setTimeout(() => setAudioError(null), 3000);
       playSegment(index + 1);
     }
-  }, [story.story_id, story.segments, totalSegments, fetchSegment, setBgmEmotion]);
+  }, [
+    story.story_id,
+    story.segments,
+    totalSegments,
+    fetchSegment,
+    setBgmEmotion,
+    voiceMode,
+    startLiveQA,
+    stopLiveQA,
+  ]);
 
   // Timer
   useEffect(() => {
@@ -134,18 +162,22 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
     stoppedRef.current = false;
     return () => {
       stoppedRef.current = true;
+      liveQaStartedRef.current = false;
+      stopLiveQA(true);
       audioEl.current?.pause();
       bgmEl.current?.pause();
       clearInterval(timerRef.current);
       Object.values(blobCache.current).forEach(URL.revokeObjectURL);
     };
-  }, []);
+  }, [stopLiveQA]);
 
   const handlePlay = useCallback(() => {
+    liveQaStartedRef.current = false;
+    stopLiveQA(true);
     setIsPlaying(true);
     setIsPaused(false);
     if (voiceMode === "ai") playSegment(currentIndexRef.current);
-  }, [voiceMode, playSegment]);
+  }, [voiceMode, playSegment, stopLiveQA]);
 
   const handlePause = useCallback(() => {
     setIsPaused(true);
@@ -161,12 +193,14 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
 
   const handleStop = useCallback(() => {
     stoppedRef.current = true;
+    liveQaStartedRef.current = false;
+    stopLiveQA(true);
     audioEl.current?.pause();
     bgmEl.current?.pause();
     if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
     clearInterval(timerRef.current);
     onStop();
-  }, [onStop]);
+  }, [onStop, stopLiveQA]);
 
   const handleSkipForward = useCallback(() => {
     const next = Math.min(currentIndexRef.current + 1, totalSegments - 1);
@@ -189,12 +223,14 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
   }, [voiceMode, playSegment]);
 
   const handleReplay = useCallback(() => {
+    liveQaStartedRef.current = false;
+    stopLiveQA(true);
     stoppedRef.current = false;
     setIsFinished(false);
     setIsPlaying(true);
     setElapsedSeconds(0);
     if (voiceMode === "ai") playSegment(0);
-  }, [voiceMode, playSegment]);
+  }, [voiceMode, playSegment, stopLiveQA]);
 
   const startRecording = useCallback(async () => {
     try {
@@ -250,6 +286,24 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
 
           {isLoadingAudio && <p className="text-xs text-white/50 font-body mb-4">Generating audio…</p>}
           {audioError && <p className="text-xs text-red-400 font-body mb-4">{audioError}</p>}
+
+          {voiceMode === "ai" && isPlaying && !isFinished && liveQaStatus !== "idle" && (
+            <div className="w-full max-w-md mb-4 rounded-xl border border-violet-400/30 bg-violet-950/40 px-3 py-2 text-left">
+              <div className="flex items-center gap-2 text-xs font-medium text-violet-200">
+                <Radio className="w-3.5 h-3.5 shrink-0" />
+                Live Q&amp;A (Gemini + mic)
+              </div>
+              <p className="text-[11px] text-violet-200/80 mt-1 font-body">
+                {liveQaDetail ||
+                  (liveQaStatus === "connecting" && "Connecting…") ||
+                  (liveQaStatus === "listening" && "Listening — ask about the story.") ||
+                  (liveQaStatus === "replying" && "Playing reply…") ||
+                  (liveQaStatus === "stopped" && "Stopped.") ||
+                  (liveQaStatus === "error" && "Something went wrong.") ||
+                  ""}
+              </p>
+            </div>
+          )}
 
           {/* Segment text */}
           {currentSegment && (
