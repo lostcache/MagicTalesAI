@@ -10,7 +10,7 @@ from .elevenlabs_client import clone_voice
 from .file_extractor import extract_text_from_epub, extract_text_from_pdf
 from .gemini_client import extract_characters_from_story
 from .models import AssignCustomVoiceRequest, CloneVoiceResponse, ExtractRequest, ExtractResponse, StoryMeta
-from .music_generator import generate_emotion_music
+from .music_generator import build_story_music_prompts, generate_emotion_music
 from .storage import (
     delete_segment_audio, has_music, has_segment_audio, list_stories, load_full_session,
     load_music, load_segment_audio, save_extraction, save_meta,
@@ -109,15 +109,18 @@ async def get_segment_audio_endpoint(story_id: str, index: int, force: bool = Fa
 
 @app.post("/api/stories/{story_id}/generate-music")
 async def generate_music_endpoint(story_id: str):
-    from .storage import load_extraction
+    from .storage import load_extraction, load_meta
 
     extraction = await load_extraction(story_id)
+    meta = await load_meta(story_id)
     unique_emotions = {seg.emotion.value for seg in extraction.segments}
+
+    story_prompts = await build_story_music_prompts(extraction, unique_emotions, meta.filename)
 
     async def _gen(emotion: str) -> tuple[str, str]:
         if await has_music(story_id, emotion):
             return emotion, "cached"
-        data = await generate_emotion_music(emotion)
+        data = await generate_emotion_music(emotion, story_prompts.get(emotion))
         if data:
             await save_music(story_id, emotion, data)
             return emotion, "generated"
@@ -132,7 +135,11 @@ async def get_music_endpoint(story_id: str, emotion: str):
     data = await load_music(story_id, emotion)
     if data is None:
         # Generate on demand if not cached (handles partial pre-generation failures)
-        data = await generate_emotion_music(emotion)
+        from .storage import load_extraction, load_meta
+        extraction = await load_extraction(story_id)
+        meta = await load_meta(story_id)
+        story_prompts = await build_story_music_prompts(extraction, {emotion}, meta.filename)
+        data = await generate_emotion_music(emotion, story_prompts.get(emotion))
         if data is None:
             raise HTTPException(status_code=404, detail=f"Music generation failed for emotion '{emotion}'")
         await save_music(story_id, emotion, data)

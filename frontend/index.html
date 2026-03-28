@@ -1081,6 +1081,19 @@
   }
   // ─────────────────────────────────────────────────
 
+  function getSmoothedEmotion(index) {
+    const curr = S.segments[index]?.emotion;
+    const next = S.segments[index + 1]?.emotion;
+    if (!next || curr === next) return curr;
+    return _bgmEmotion || curr;
+  }
+
+  function getSegmentPause(prevSeg, nextSeg) {
+    if (!prevSeg || !nextSeg) return 150;
+    if (prevSeg.type === 'dialogue' && nextSeg.type === 'dialogue') return 200;
+    return 350;
+  }
+
   const prefetchCache = {}; // index -> blob url
   const fetchPromises = {}; // index -> promise
 
@@ -1105,20 +1118,24 @@
     const player = document.getElementById('audio-player');
     if (!player.onended) {
       player.onended = async () => {
+        const prevSeg = S.segments[S.currentSegment];
         S.currentSegment++;
         if (S.currentSegment < S.segmentsCount) {
           setMsg('msg-play', `Playing segment ${S.currentSegment + 1}/${S.segmentsCount}`, 'loading');
-          const emotion = S.segments[S.currentSegment]?.emotion;
+          const emotion = getSmoothedEmotion(S.currentSegment);
           if (emotion) setBGMEmotion(emotion);
-          try {
-            player.src = await fetchSegment(S.currentSegment, false);
-            player.play();
-            if (S.currentSegment + 1 < S.segmentsCount) {
-              fetchSegment(S.currentSegment + 1, false).catch(() => {});
+          const pause = getSegmentPause(prevSeg, S.segments[S.currentSegment]);
+          setTimeout(async () => {
+            try {
+              player.src = await fetchSegment(S.currentSegment, false);
+              player.play();
+              if (S.currentSegment + 1 < S.segmentsCount) {
+                fetchSegment(S.currentSegment + 1, false).catch(() => {});
+              }
+            } catch (e) {
+              setMsg('msg-play', `Error loading segment ${S.currentSegment + 1}: ${e.message}`, 'error');
             }
-          } catch (e) {
-            setMsg('msg-play', `Error loading segment ${S.currentSegment + 1}: ${e.message}`, 'error');
-          }
+          }, pause);
         } else {
           stopBGM();
           setMsg('msg-play', 'Finished story.', 'done');
@@ -1176,7 +1193,7 @@
       player.play();
 
       // Start background music for the first segment
-      const firstEmotion = S.segments[S.currentSegment]?.emotion;
+      const firstEmotion = getSmoothedEmotion(S.currentSegment);
       if (firstEmotion) setBGMEmotion(firstEmotion);
 
       setMsg('msg-play', `Playing segment ${S.currentSegment + 1}/${S.segmentsCount}`, 'loading');

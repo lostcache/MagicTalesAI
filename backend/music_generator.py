@@ -1,12 +1,14 @@
 """Generate mood-matched background music via Google Lyria (lyria-002)."""
 
+import json
 import logging
 
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from .gemini_client import _client
+from .gemini_client import MODEL, _client
+from .models import ExtractionResult
 
 logger = logging.getLogger(__name__)
 
@@ -16,43 +18,97 @@ _NO_VOICE = "no vocals, no singing, no voice, no speech, no lyrics, no words, pu
 
 EMOTION_PROMPTS: dict[str, str] = {
     "happy": (
-        "upbeat acoustic folk, cheerful bright piano melody, warm guitar strumming, "
-        "playful flute, light percussion, major key, lively and joyful, " + _NO_VOICE
+        "warm storybook orchestral, gentle piano melody, light pizzicato strings, "
+        "soft flute, cheerful and pastoral, children's film score, moderate tempo, soft dynamics, " + _NO_VOICE
     ),
     "sad": (
-        "melancholic ambient orchestral, slow solo piano, soft string quartet, "
-        "minor key, somber and reflective, gentle cello sustain, muted dynamics, " + _NO_VOICE
+        "tender solo piano, gentle string underscore, bittersweet and introspective, "
+        "slow tempo, muted cello, children's film emotional score, soft dynamics, " + _NO_VOICE
     ),
     "excited": (
-        "energetic adventure theme, driving percussion, soaring orchestral strings, "
-        "triumphant brass, fast tempo, major key, heroic and uplifting, " + _NO_VOICE
+        "adventurous children's orchestral, buoyant strings, light brass swell, "
+        "playful momentum, heroic but gentle, moderate-fast tempo, soft-to-medium dynamics, " + _NO_VOICE
     ),
     "scared": (
-        "dark suspense cinematic, low cello drones, dissonant string clusters, "
-        "eerie synthesizer pads, tense atmosphere, minor key, slow building dread, " + _NO_VOICE
+        "eerie children's suspense score, sparse low strings, subtle dissonance, "
+        "haunting woodwinds, mysterious tension, slow tempo, soft dynamics, " + _NO_VOICE
     ),
     "angry": (
-        "intense dramatic orchestral, powerful brass stabs, aggressive percussion, "
-        "relentless driving rhythm, dark minor key, fury and conflict, " + _NO_VOICE
+        "tense dramatic underscore, brooding low brass, dissonant strings, "
+        "restless rhythm, conflict and unease, children's film score, medium tempo, medium dynamics, " + _NO_VOICE
     ),
     "calm": (
-        "peaceful ambient, soft piano arpeggios, gentle acoustic guitar, "
-        "warm synthesizer pads, serene and meditative, slow tempo, major key, " + _NO_VOICE
+        "serene pastoral orchestral, soft piano arpeggios, warm strings, "
+        "peaceful and gentle, storybook lullaby feel, slow tempo, soft dynamics, " + _NO_VOICE
     ),
     "mysterious": (
-        "mysterious dark atmospheric, modal harmonics, sparse piano, "
-        "eerie reverb-drenched strings, haunting melody, slow ethereal pacing, "
-        "minimalist and tense, " + _NO_VOICE
+        "fairy-tale mystery score, modal strings, sparse celesta, "
+        "wondering and ethereal, enchanted forest atmosphere, slow tempo, soft dynamics, " + _NO_VOICE
     ),
     "curious": (
-        "light whimsical orchestral, pizzicato strings, playful woodwinds, "
-        "gentle harp arpeggios, light percussion, inquisitive and bright, major key, " + _NO_VOICE
+        "whimsical children's score, playful pizzicato strings, light woodwinds, "
+        "inquisitive and bright, storybook wonder, moderate tempo, soft dynamics, " + _NO_VOICE
     ),
     "neutral": (
-        "neutral ambient background, soft orchestral pad, gentle strings, "
-        "unobtrusive and understated, medium tempo, neither happy nor sad, " + _NO_VOICE
+        "gentle storybook underscore, warm orchestral pad, soft strings, "
+        "unobtrusive and neutral, children's film background, slow tempo, soft dynamics, " + _NO_VOICE
     ),
 }
+
+
+async def build_story_music_prompts(
+    extraction: ExtractionResult,
+    emotions: set[str],
+    filename: str = "",
+) -> dict[str, str]:
+    """Ask Gemini to generate story-specific Lyria prompts for each emotion.
+
+    Falls back gracefully (returns {}) on any failure; callers should then
+    use EMOTION_PROMPTS as the default.
+    """
+    char_summary = "; ".join(
+        f"{c.name} ({c.role.value}): {c.description}"
+        for c in extraction.characters[:8]
+    )
+    story_sample = " ".join(s.text for s in extraction.segments[:12])[:1500]
+    emotions_list = ", ".join(sorted(emotions))
+
+    prompt = (
+        "You are a film score consultant for a children's audiobook app. "
+        "Generate Lyria AI music generation prompts for background narration music.\n\n"
+        f"Story filename: {filename}\n"
+        f"Characters: {char_summary}\n"
+        f"Story excerpt: {story_sample}\n\n"
+        f"Emotions needed: {emotions_list}\n\n"
+        "For each emotion, write a short Lyria prompt (comma-separated descriptors, ~15-20 words) "
+        "that reflects this story's specific setting, period, and genre. "
+        "Music is soft background underscore — do NOT use: upbeat, driving, triumphant, energetic, powerful. "
+        f"End every prompt with: {_NO_VOICE}\n\n"
+        'Return a JSON object: {"emotion": "prompt string", ...}. Include only the requested emotions.'
+    )
+
+    try:
+        response = await _client.aio.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.5,
+                max_output_tokens=1024,
+            ),
+        )
+        if response.text:
+            raw = json.loads(response.text)
+            cleaned: dict[str, str] = {}
+            for emotion, text in raw.items():
+                if emotion in emotions:
+                    if _NO_VOICE not in text:
+                        text = text.rstrip(", ") + ", " + _NO_VOICE
+                    cleaned[emotion] = text
+            return cleaned
+    except Exception:
+        logger.warning("Failed to build story-specific music prompts; falling back to defaults.")
+    return {}
 
 
 @retry(
@@ -61,12 +117,12 @@ EMOTION_PROMPTS: dict[str, str] = {
     retry=retry_if_exception_type(APIError),
     reraise=True,
 )
-async def generate_emotion_music(emotion: str) -> bytes | None:
+async def generate_emotion_music(emotion: str, prompt_text: str | None = None) -> bytes | None:
     """Generate a ~30s background music clip for the given emotion via Lyria.
 
     Returns raw audio bytes (audio/mpeg) or None if generation failed.
     """
-    prompt_text = EMOTION_PROMPTS.get(emotion)
+    prompt_text = prompt_text or EMOTION_PROMPTS.get(emotion)
     if prompt_text is None:
         logger.warning("Unknown emotion '%s', skipping music generation.", emotion)
         return None
