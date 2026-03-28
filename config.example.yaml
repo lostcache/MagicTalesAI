@@ -1,0 +1,13 @@
+gcp_project: "your-project-id"
+gcp_location: "us-central1"
+lyria_model: "lyria-002"
+
+llm_provider: "claude"
+# anthropic_api_key: "sk-ant-..."  # Or set MAGICTALES_ANTHROPIC_API_KEY env var
+
+output_dir: "output"
+cache_enabled: true
+
+# Chunking
+min_section_words: 200
+max_section_words: 3000
