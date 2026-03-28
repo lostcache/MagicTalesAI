@@ -53,10 +53,11 @@ Behavior (critical):
             activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
             automatic_activity_detection=types.AutomaticActivityDetection(
                 disabled=False,
-                start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                # LOW start sensitivity reduces false "user spoke" triggers from ambient noise.
+                start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
                 end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                prefix_padding_ms=120,
-                silence_duration_ms=400,
+                prefix_padding_ms=200,
+                silence_duration_ms=800,
             ),
         ),
         system_instruction=types.Content(

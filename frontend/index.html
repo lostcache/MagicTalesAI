@@ -1169,6 +1169,7 @@
     const btnRegen = document.getElementById('btn-regen');
 
     _liveQaPausedAudiobook = false;
+    _liveQaPausedBgm = false;
     stopLiveQA(true);
 
     btnPlay.disabled = true;
@@ -1248,15 +1249,25 @@
   let _livePlaySources = [];
   let _liveLastBargeIn = 0;
   let _liveQaPausedAudiobook = false;
+  let _liveQaPausedBgm = false;
+  let _liveQaResumeTimer = null;
+  let _liveQaInnerResumeTimer = null;
   let _liveQaExpectClose = false;
-  const LIVE_MIC_SPEECH_RMS = 0.028;
-  const LIVE_BARGE_IN_COOLDOWN_MS = 80;
+  /** Min RMS to treat mic input as speech (barge-in). Higher = less sensitive to room noise. */
+  const LIVE_MIC_SPEECH_RMS = 0.055;
+  const LIVE_BARGE_IN_COOLDOWN_MS = 120;
+  /** No PCM chunks for this long ⇒ model finished sending this reply; then wait for playback to drain. */
+  const LIVE_REPLY_END_GAP_MS = 480;
 
   function flushLiveModelAudio() {
     if (!_livePlayCtx) return;
     const now = performance.now();
     if (now - _liveLastBargeIn < LIVE_BARGE_IN_COOLDOWN_MS) return;
     _liveLastBargeIn = now;
+    clearTimeout(_liveQaResumeTimer);
+    clearTimeout(_liveQaInnerResumeTimer);
+    _liveQaResumeTimer = null;
+    _liveQaInnerResumeTimer = null;
     for (const s of _livePlaySources) {
       try { s.stop(0); } catch (_) {}
     }
@@ -1271,7 +1282,34 @@
       _liveQaPausedAudiobook = true;
     }
     const bgm = document.getElementById('bgm-player');
-    if (bgm && !bgm.paused) bgm.pause();
+    if (bgm && !bgm.paused) {
+      bgm.pause();
+      _liveQaPausedBgm = true;
+    }
+  }
+
+  function scheduleResumeAudiobookAfterLiveReply() {
+    if (!_liveQaPausedAudiobook) return;
+    clearTimeout(_liveQaResumeTimer);
+    clearTimeout(_liveQaInnerResumeTimer);
+    _liveQaResumeTimer = setTimeout(() => {
+      _liveQaResumeTimer = null;
+      if (!_liveQaPausedAudiobook || !_livePlayCtx) return;
+      const msLeft = Math.max(0, (_liveNextPlayTime - _livePlayCtx.currentTime) * 1000) + 60;
+      _liveQaInnerResumeTimer = setTimeout(() => {
+        _liveQaInnerResumeTimer = null;
+        if (!_liveQaPausedAudiobook) return;
+        const ap = document.getElementById('audio-player');
+        if (ap && ap.paused) ap.play().catch(() => {});
+        if (_liveQaPausedBgm) {
+          const bgm = document.getElementById('bgm-player');
+          if (bgm && bgm.src) bgm.play().catch(() => {});
+          _liveQaPausedBgm = false;
+        }
+        _liveQaPausedAudiobook = false;
+        setMsg('msg-live-qa', 'Listening — ask about the story.', 'success');
+      }, msLeft);
+    }, LIVE_REPLY_END_GAP_MS);
   }
 
   function maybeBargeInFromMic(inputFloat32) {
@@ -1297,12 +1335,21 @@
 
   function stopLiveQA(silent) {
     _liveQaExpectClose = true;
+    clearTimeout(_liveQaResumeTimer);
+    clearTimeout(_liveQaInnerResumeTimer);
+    _liveQaResumeTimer = null;
+    _liveQaInnerResumeTimer = null;
     teardownLiveMediaOnly();
     if (_liveWs) { try { _liveWs.close(); } catch (_) {} _liveWs = null; }
     if (_liveQaPausedAudiobook) {
       _liveQaPausedAudiobook = false;
       const ap = document.getElementById('audio-player');
       if (ap) ap.play().catch(() => {});
+    }
+    if (_liveQaPausedBgm) {
+      const bgm = document.getElementById('bgm-player');
+      if (bgm && bgm.src) bgm.play().catch(() => {});
+      _liveQaPausedBgm = false;
     }
     if (!silent) setMsg('msg-live-qa', 'Stopped.', 'success');
   }
@@ -1396,6 +1443,7 @@
         const start = Math.max(_livePlayCtx.currentTime, _liveNextPlayTime);
         src.start(start);
         _liveNextPlayTime = start + buf.duration;
+        scheduleResumeAudiobookAfterLiveReply();
       };
 
       ws.onerror = () => {
@@ -1415,6 +1463,10 @@
   }
 
   function teardownLiveMediaOnly() {
+    clearTimeout(_liveQaResumeTimer);
+    clearTimeout(_liveQaInnerResumeTimer);
+    _liveQaResumeTimer = null;
+    _liveQaInnerResumeTimer = null;
     if (_liveProc) { try { _liveProc.disconnect(); } catch (_) {} _liveProc = null; }
     if (_liveAudioCtx) { try { _liveAudioCtx.close(); } catch (_) {} _liveAudioCtx = null; }
     if (_liveStream) { _liveStream.getTracks().forEach(t => t.stop()); _liveStream = null; }
