@@ -52,6 +52,19 @@ def save_segment_audio(story_id: str, index: int, wav_bytes: bytes) -> None:
     segment_audio_path(story_id, index).write_bytes(wav_bytes)
 
 
+def music_path(story_id: str, emotion: str) -> Path:
+    return story_path(story_id) / f"music_{emotion}.mp3"
+
+
+def save_music(story_id: str, emotion: str, data: bytes) -> None:
+    music_path(story_id, emotion).write_bytes(data)
+
+
+def load_music(story_id: str, emotion: str) -> bytes | None:
+    p = music_path(story_id, emotion)
+    return p.read_bytes() if p.exists() else None
+
+
 def list_stories() -> list[StoryMeta]:
     if not STORY_DIR.exists():
         return []

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
@@ -8,7 +9,12 @@ from fastapi.responses import FileResponse, Response
 from .file_extractor import extract_text_from_epub, extract_text_from_pdf
 from .gemini_client import extract_characters_from_story
 from .models import ExtractRequest, ExtractResponse, StoryMeta
-from .storage import segment_audio_path, list_stories, load_full_session, save_segment_audio, save_extraction, save_meta, save_voices
+from .music_generator import generate_emotion_music
+from .storage import (
+    list_stories, load_full_session, load_music,
+    music_path, save_extraction, save_meta, save_music,
+    save_segment_audio, save_voices, segment_audio_path,
+)
 from .tts_generator import generate_segment_audio
 from .voice_assigner import assign_voices
 
@@ -97,6 +103,38 @@ async def get_segment_audio_endpoint(story_id: str, index: int, force: bool = Fa
             save_meta(story_id, meta)
 
     return Response(content=wav_bytes, media_type="audio/wav")
+
+
+@app.post("/api/stories/{story_id}/generate-music")
+async def generate_music_endpoint(story_id: str):
+    from .storage import load_extraction
+
+    extraction = load_extraction(story_id)
+    unique_emotions = {seg.emotion.value for seg in extraction.segments}
+
+    async def _gen(emotion: str) -> tuple[str, str]:
+        if music_path(story_id, emotion).exists():
+            return emotion, "cached"
+        data = await generate_emotion_music(emotion)
+        if data:
+            save_music(story_id, emotion, data)
+            return emotion, "generated"
+        return emotion, "failed"
+
+    results = await asyncio.gather(*[_gen(e) for e in unique_emotions])
+    return {"emotions": dict(results)}
+
+
+@app.get("/api/stories/{story_id}/music/{emotion}")
+async def get_music_endpoint(story_id: str, emotion: str):
+    data = load_music(story_id, emotion)
+    if data is None:
+        # Generate on demand if not cached (handles partial pre-generation failures)
+        data = await generate_emotion_music(emotion)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"Music generation failed for emotion '{emotion}'")
+        save_music(story_id, emotion, data)
+    return Response(content=data, media_type="audio/mpeg")
 
 
 @app.get("/api/stories")

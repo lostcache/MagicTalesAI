@@ -438,6 +438,13 @@
       </div>
       <div class="msg" id="msg-play"></div>
       <audio id="audio-player" controls style="display:none; margin-top:16px; width:100%;"></audio>
+      <audio id="bgm-player" loop style="display:none;"></audio>
+      <div id="bgm-controls" style="display:none; margin-top:8px; align-items:center; gap:8px;">
+        <label style="font-size:0.75rem; color:#6b7280;">Music vol</label>
+        <input type="range" id="bgm-volume" min="0" max="100" value="20" style="width:70px;"
+               oninput="document.getElementById('bgm-player').volume = this.value/100">
+        <span id="bgm-emotion" style="font-size:0.7rem; color:#9b59f5; font-style:italic;"></span>
+      </div>
     </div>
   </div>
 
@@ -445,7 +452,7 @@
 
 <script>
   // ── State ─────────────────────────────────────────
-  const S = { text: null, filename: null, storyId: null, segmentsCount: 0, currentSegment: 0 };
+  const S = { text: null, filename: null, storyId: null, segmentsCount: 0, currentSegment: 0, segments: [] };
 
   // ── Recent stories ────────────────────────────────
   async function loadRecent() {
@@ -482,6 +489,7 @@
       S.storyId  = data.story_id;
       S.filename = data.filename;
       S.segmentsCount = data.segments ? data.segments.length : 0;
+      S.segments = data.segments || [];
 
       // Step 1: mark upload done
       document.getElementById('upload-loaded').textContent = `✓ ${data.filename}`;
@@ -630,6 +638,7 @@
       const data = await res.json();
       S.storyId = data.story_id;
       S.segmentsCount = data.segments ? data.segments.length : 0;
+      S.segments = data.segments || [];
 
       clearMsg('msg-extract');
       renderExtractResults(data.characters, data.segments);
@@ -761,6 +770,47 @@
   }
 
   // ── Step 4: Play ──────────────────────────────────
+
+  // ── Background music helpers ──────────────────────
+  let _bgmEmotion = null;
+
+  function _fadeBGM(from, to, ms) {
+    const bgm = document.getElementById('bgm-player');
+    const steps = 10;
+    const interval = ms / steps;
+    const delta = (to - from) / steps;
+    let vol = from;
+    const timer = setInterval(() => {
+      vol = Math.min(1, Math.max(0, vol + delta));
+      bgm.volume = vol;
+      if ((delta > 0 && vol >= to) || (delta <= 0 && vol <= to)) clearInterval(timer);
+    }, interval);
+  }
+
+  function setBGMEmotion(emotion) {
+    if (!S.storyId || !emotion || emotion === _bgmEmotion) return;
+    const bgm = document.getElementById('bgm-player');
+    const targetVol = parseInt(document.getElementById('bgm-volume').value) / 100;
+    _bgmEmotion = emotion;
+    document.getElementById('bgm-emotion').textContent = `♪ ${emotion}`;
+    _fadeBGM(bgm.volume, 0, 400);
+    setTimeout(() => {
+      bgm.src = `/api/stories/${S.storyId}/music/${emotion}`;
+      bgm.volume = 0;
+      bgm.play().catch(() => {});
+      _fadeBGM(0, targetVol, 600);
+    }, 420);
+  }
+
+  function stopBGM() {
+    const bgm = document.getElementById('bgm-player');
+    _fadeBGM(bgm.volume, 0, 500);
+    setTimeout(() => { bgm.pause(); bgm.src = ''; _bgmEmotion = null;
+      document.getElementById('bgm-emotion').textContent = '';
+    }, 520);
+  }
+  // ─────────────────────────────────────────────────
+
   const prefetchCache = {}; // index -> blob url
   const fetchPromises = {}; // index -> promise
 
@@ -788,6 +838,8 @@
         S.currentSegment++;
         if (S.currentSegment < S.segmentsCount) {
           setMsg('msg-play', `Playing segment ${S.currentSegment + 1}/${S.segmentsCount}`, 'loading');
+          const emotion = S.segments[S.currentSegment]?.emotion;
+          if (emotion) setBGMEmotion(emotion);
           try {
             player.src = await fetchSegment(S.currentSegment, false);
             player.play();
@@ -798,6 +850,7 @@
             setMsg('msg-play', `Error loading segment ${S.currentSegment + 1}: ${e.message}`, 'error');
           }
         } else {
+          stopBGM();
           setMsg('msg-play', 'Finished story.', 'done');
           setStatus('st-play', 'Done', 'done');
           document.getElementById('btn-play').disabled = false;
@@ -820,25 +873,41 @@
       for (let k in prefetchCache) delete prefetchCache[k];
       for (let k in fetchPromises) delete fetchPromises[k];
       S.currentSegment = 0;
+      _bgmEmotion = null;
     } else {
       // If we pause and play again, or want to replay
       // We might want to restart from 0 if it already finished
       if (S.currentSegment >= S.segmentsCount) {
         S.currentSegment = 0;
+        _bgmEmotion = null;
       }
     }
 
-    setMsg('msg-play', 'Loading audio…', 'loading');
+    // Show BGM controls
+    const bgmControls = document.getElementById('bgm-controls');
+    bgmControls.style.display = 'flex';
+
+    // Pre-generate background music (non-fatal if it fails)
+    setMsg('msg-play', 'Generating background music…', 'loading');
     setStatus('st-play', 'Loading…', 'loading');
+    try {
+      await fetch(`/api/stories/${S.storyId}/generate-music`, { method: 'POST' });
+    } catch (_) { /* proceed without BGM */ }
+
+    setMsg('msg-play', 'Loading audio…', 'loading');
 
     try {
       const player = document.getElementById('audio-player');
       player.style.display = 'block';
-      
+
       setupPlayerEnded();
 
       player.src = await fetchSegment(S.currentSegment, isRegen);
       player.play();
+
+      // Start background music for the first segment
+      const firstEmotion = S.segments[S.currentSegment]?.emotion;
+      if (firstEmotion) setBGMEmotion(firstEmotion);
 
       setMsg('msg-play', `Playing segment ${S.currentSegment + 1}/${S.segmentsCount}`, 'loading');
       setStatus('st-play', 'Playing', 'done');
