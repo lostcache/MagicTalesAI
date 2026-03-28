@@ -12,9 +12,6 @@ dist
 dist-ssr
 *.local
 
-magictales-ai-stories/node_modules
-magictales-ai-stories/dist
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
