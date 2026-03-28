@@ -166,6 +166,10 @@ background-music/
 # Story session data
 data/
 
+# magictales-ai-stories
+magictales-ai-stories/node_modules
+magictales-ai-stories/dist
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
