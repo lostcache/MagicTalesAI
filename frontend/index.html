@@ -206,9 +206,68 @@
     .v-Aoede   { background:#ede9fe; color:#4c1d95; }
     .v-Leda    { background:#dcfce7; color:#14532d; }
     .v-Orus    { background:#e0f2fe; color:#075985; }
-    .v-Zephyr  { background:#ccfbf1; color:#134e4a; }
+    .v-Zephyr    { background:#ccfbf1; color:#134e4a; }
+    .v-elevenlabs { background:#fdf2f8; color:#9d174d; border:1px solid #f9a8d4; }
 
     .voice-style { font-size: 0.75rem; color: #6b7280; margin-top: 4px; font-style: italic; }
+
+    /* ── Custom Voice step ─────────────────────────── */
+    #voice-clone-zone {
+      border: 2px dashed #c4b5f0;
+      border-radius: 10px;
+      padding: 20px;
+      background: #faf8ff;
+      margin-bottom: 14px;
+    }
+    #voice-clone-zone input[type="file"] { display: none; }
+    .char-assign-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .char-assign-card {
+      border: 1px solid #e2d9f7;
+      border-radius: 10px;
+      padding: 12px 14px;
+      background: #faf8ff;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .btn-assign {
+      font-size: 0.78rem;
+      padding: 5px 12px;
+      background: #7c3aed;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-top: 4px;
+      align-self: flex-start;
+    }
+    .btn-assign:hover { background: #6d28d9; }
+    .btn-assign:disabled { background: #c4b5f0; cursor: not-allowed; }
+    .btn-skip-custom {
+      background: none;
+      border: 1px solid #9ca3af;
+      color: #6b7280;
+      font-size: 0.8rem;
+      padding: 6px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .btn-skip-custom:hover { border-color: #5b3ec8; color: #5b3ec8; }
+    .rec-btn {
+      padding: 7px 14px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .rec-start { background: #fee2e2; color: #991b1b; }
+    .rec-stop  { background: #dcfce7; color: #166534; }
 
     /* ── Segment list ──────────────────────────────── */
     .seg-list {
@@ -420,10 +479,51 @@
     </div>
   </div>
 
-  <!-- ── Step 4: Play ─────────────────────────────── -->
-  <div class="step locked" id="step-play">
+  <!-- ── Step 4: Custom Voice (Optional) ─────────── -->
+  <div class="step locked" id="step-custom-voice">
     <div class="step-header">
       <div class="step-num">4</div>
+      <div class="step-title">Custom Voice <span style="font-size:0.75rem;color:#9ca3af;font-weight:400;">(optional)</span></div>
+      <span class="step-status status-locked" id="st-custom-voice">Optional</span>
+    </div>
+    <div class="step-body">
+      <p style="font-size:0.85rem;color:#6b7280;margin-bottom:14px;">
+        Clone your voice with ElevenLabs and assign it to any character. Skip to use Gemini voices only.
+      </p>
+      <div id="voice-clone-zone">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <input type="text" id="clone-name-input" placeholder="Voice label (optional)"
+                 style="padding:7px 10px;border:1px solid #e2d9f7;border-radius:6px;font-size:0.85rem;flex:1;min-width:140px;">
+          <button class="btn" style="margin-top:0;padding:8px 16px;" onclick="triggerCloneUpload()">Upload samples</button>
+          <button class="rec-btn rec-start" id="btn-rec" onclick="toggleRecording()">Record from mic</button>
+        </div>
+        <input type="file" id="clone-file-input" accept="audio/*,.mp3,.wav,.m4a,.webm" multiple
+               onchange="onCloneFilesSelected(event)">
+        <div id="recorded-preview" style="display:none;margin-top:8px;">
+          <span style="font-size:0.82rem;color:#166534;">Recording ready.</span>
+          <button class="btn" style="margin-top:0;padding:6px 14px;margin-left:8px;font-size:0.8rem;"
+                  onclick="submitRecording()">Use this recording</button>
+        </div>
+      </div>
+      <div class="msg" id="msg-clone"></div>
+      <div id="custom-voice-assign-area" style="display:none;">
+        <div style="font-size:0.82rem;color:#6b7280;margin-bottom:8px;">
+          Cloned voice ID: <strong id="cloned-voice-id-display"></strong> — assign it to a character below.
+        </div>
+        <div class="char-assign-grid" id="char-assign-grid"></div>
+      </div>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn" onclick="proceedToPlay()">Done — Go to Play</button>
+        <button class="btn-skip-custom" onclick="skipCustomVoice()">Skip — use Gemini voices only</button>
+      </div>
+      <div class="msg" id="msg-custom-assign"></div>
+    </div>
+  </div>
+
+  <!-- ── Step 5: Play ─────────────────────────────── -->
+  <div class="step locked" id="step-play">
+    <div class="step-header">
+      <div class="step-num">5</div>
       <div class="step-title">Play Audiobook</div>
       <span class="step-status status-locked" id="st-play">Coming soon</span>
     </div>
@@ -452,7 +552,13 @@
 
 <script>
   // ── State ─────────────────────────────────────────
-  const S = { text: null, filename: null, storyId: null, segmentsCount: 0, currentSegment: 0, segments: [] };
+  const S = {
+    text: null, filename: null, storyId: null,
+    segmentsCount: 0, currentSegment: 0, segments: [],
+    voiceAssignments: [],
+    clonedVoiceId: null,
+    _recording: false, _mediaRecorder: null, _recordingChunks: [], _recordedBlob: null,
+  };
 
   // ── Recent stories ────────────────────────────────
   async function loadRecent() {
@@ -507,7 +613,11 @@
         setStepState('step-voices', 'done');
         setStatus('st-voices', 'Done', 'done');
 
-        // Step 4: unlock play
+        // Step 4: unlock custom voice step
+        unlockCustomVoiceStep(data.voice_assignments);
+        S.voiceAssignments = data.voice_assignments;
+
+        // Also immediately unlock play (session already has voice assignments)
         setStepState('step-play', 'active');
         document.getElementById('btn-play').disabled = false;
 
@@ -518,7 +628,7 @@
           document.getElementById('btn-play').textContent = '▶ Play Story';
           document.getElementById('btn-regen').style.display = 'inline-flex';
           document.getElementById('btn-regen').disabled = false;
-          
+
           // Pre-load the first segment so the native player works if they click it directly
           if (!player.src) {
             fetchSegment(0, false).then(url => {
@@ -726,13 +836,8 @@
       setStepState('step-voices', 'done');
       setStatus('st-voices', 'Done', 'done');
 
-      // Unlock play
-      setStepState('step-play', 'active');
-      setStatus('st-play', 'Ready', 'active');
-      document.getElementById('btn-play').disabled = false;
-      document.getElementById('btn-regen').style.display = 'inline-flex';
-      document.getElementById('btn-regen').disabled = false;
-      setupPlayerEnded();
+      // Unlock optional custom voice step (play unlocked after that)
+      unlockCustomVoiceStep(data.assignments);
     } catch (e) {
       setMsg('msg-voices', `Error: ${e.message}`, 'error');
       setStatus('st-voices', 'Error', 'error');
@@ -747,11 +852,15 @@
     const grid = document.getElementById('voice-grid');
     grid.innerHTML = '';
     for (const a of assignments) {
+      const hasCustom = Boolean(a.elevenlabs_voice_id);
+      const voiceLabel = hasCustom ? `Custom (${a.elevenlabs_voice_id.slice(0,8)}…)` : a.voice_name;
+      const badgeClass = hasCustom ? 'v-elevenlabs' : `v-${esc(a.voice_name)}`;
+
       // Also patch the character card from step 2 with the voice badge
       const cardId = `ccard-${a.character_name.replace(/\s+/g,'_')}`;
       const card = document.getElementById(cardId);
       if (card) {
-        card.innerHTML += `<span class="voice-badge v-${esc(a.voice_name)}">${esc(a.voice_name)}</span>
+        card.innerHTML += `<span class="voice-badge ${badgeClass}">${esc(voiceLabel)}</span>
           <div class="voice-style">${esc(a.speaking_style)}</div>`;
       }
 
@@ -759,7 +868,7 @@
         <div class="char-card">
           <div class="char-card-top">
             <span class="char-name">${esc(a.character_name)}</span>
-            <span class="voice-badge v-${esc(a.voice_name)}">${esc(a.voice_name)}</span>
+            <span class="voice-badge ${badgeClass}">${esc(voiceLabel)}</span>
           </div>
           <div class="voice-style">${esc(a.speaking_style)}</div>
           <div class="char-desc" style="margin-top:6px;">${esc(a.rationale)}</div>
@@ -769,7 +878,168 @@
     document.getElementById('voices-results').style.display = 'block';
   }
 
-  // ── Step 4: Play ──────────────────────────────────
+  // ── Step 4: Custom Voice ──────────────────────────
+
+  function unlockCustomVoiceStep(assignments) {
+    S.voiceAssignments = assignments;
+    setStepState('step-custom-voice', 'active');
+    setStatus('st-custom-voice', 'Optional', 'active');
+    renderCharAssignGrid(assignments);
+  }
+
+  function renderCharAssignGrid(assignments) {
+    const grid = document.getElementById('char-assign-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    for (const a of assignments) {
+      const hasCustom = Boolean(a.elevenlabs_voice_id);
+      const voiceLabel = hasCustom ? `Custom (${a.elevenlabs_voice_id.slice(0,8)}…)` : a.voice_name;
+      const badgeClass = hasCustom ? 'v-elevenlabs' : `v-${esc(a.voice_name)}`;
+      const safeId = a.character_name.replace(/\s+/g,'_').replace(/['"]/g,'');
+      grid.innerHTML += `
+        <div class="char-assign-card" id="acard-${esc(safeId)}">
+          <span class="char-name">${esc(a.character_name)}</span>
+          <span class="voice-badge ${badgeClass}">${esc(voiceLabel)}</span>
+          <button class="btn-assign" id="assign-btn-${esc(safeId)}"
+                  onclick="assignCustomVoice('${esc(a.character_name)}')"
+                  ${S.clonedVoiceId ? '' : 'disabled'}>
+            ${hasCustom ? 'Reassign' : 'Assign cloned voice'}
+          </button>
+        </div>`;
+    }
+  }
+
+  function triggerCloneUpload() {
+    document.getElementById('clone-file-input').click();
+  }
+
+  async function onCloneFilesSelected(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length) await doCloneVoice(files);
+  }
+
+  async function toggleRecording() {
+    if (!S._recording) {
+      S._recordingChunks = [];
+      S._recordedBlob = null;
+      document.getElementById('recorded-preview').style.display = 'none';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus' : 'audio/webm';
+        S._mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
+        S._mediaRecorder.ondataavailable = e => { if (e.data.size) S._recordingChunks.push(e.data); };
+        S._mediaRecorder.onstop = () => {
+          stream.getTracks().forEach(t => t.stop());
+          S._recordedBlob = new Blob(S._recordingChunks, { type: mime });
+          document.getElementById('recorded-preview').style.display = 'block';
+        };
+        S._mediaRecorder.start();
+        S._recording = true;
+        const btn = document.getElementById('btn-rec');
+        btn.textContent = 'Stop recording';
+        btn.className = 'rec-btn rec-stop';
+      } catch (err) {
+        setMsg('msg-clone', `Microphone error: ${err.message}`, 'error');
+      }
+    } else {
+      if (S._mediaRecorder && S._mediaRecorder.state !== 'inactive') S._mediaRecorder.stop();
+      S._recording = false;
+      const btn = document.getElementById('btn-rec');
+      btn.textContent = 'Record from mic';
+      btn.className = 'rec-btn rec-start';
+    }
+  }
+
+  async function submitRecording() {
+    if (!S._recordedBlob) return;
+    const file = new File([S._recordedBlob], 'recording.webm', { type: S._recordedBlob.type });
+    await doCloneVoice([file]);
+  }
+
+  async function doCloneVoice(files) {
+    setMsg('msg-clone', 'Cloning voice with ElevenLabs…', 'loading');
+    const name = document.getElementById('clone-name-input').value.trim();
+    const fd = new FormData();
+    if (name) fd.append('name', name);
+    for (const f of files) fd.append('files', f, f.name);
+    try {
+      const res = await fetch('/api/voices/clone', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      S.clonedVoiceId = data.voice_id;
+      document.getElementById('cloned-voice-id-display').textContent = data.voice_id;
+      document.getElementById('custom-voice-assign-area').style.display = 'block';
+      renderCharAssignGrid(S.voiceAssignments);
+      const note = data.requires_verification
+        ? ' Note: ElevenLabs may require account verification before this voice is usable.'
+        : '';
+      setMsg('msg-clone', `Voice "${data.name}" cloned successfully.${note}`, 'success');
+    } catch (e) {
+      setMsg('msg-clone', `Clone failed: ${e.message}`, 'error');
+    }
+  }
+
+  async function assignCustomVoice(characterName) {
+    if (!S.clonedVoiceId || !S.storyId) return;
+    const safeId = characterName.replace(/\s+/g,'_').replace(/['"]/g,'');
+    const btn = document.getElementById(`assign-btn-${safeId}`);
+    if (btn) btn.disabled = true;
+    clearMsg('msg-custom-assign');
+    try {
+      const res = await fetch(`/api/stories/${S.storyId}/assign-custom-voice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ character_name: characterName, elevenlabs_voice_id: S.clonedVoiceId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      // Update local assignment state
+      S.voiceAssignments = S.voiceAssignments.map(a =>
+        a.character_name.toLowerCase() === characterName.toLowerCase()
+          ? { ...a, elevenlabs_voice_id: S.clonedVoiceId }
+          : a
+      );
+      renderCharAssignGrid(S.voiceAssignments);
+      setMsg('msg-custom-assign',
+        `"${characterName}" will now use your cloned voice. ${data.segments_invalidated} cached segment(s) cleared.`,
+        'success');
+    } catch (e) {
+      setMsg('msg-custom-assign', `Assignment failed: ${e.message}`, 'error');
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function skipCustomVoice() {
+    setStepState('step-custom-voice', 'done');
+    setStatus('st-custom-voice', 'Skipped', 'done');
+    setStepState('step-play', 'active');
+    setStatus('st-play', 'Ready', 'active');
+    document.getElementById('btn-play').disabled = false;
+    document.getElementById('btn-regen').style.display = 'inline-flex';
+    document.getElementById('btn-regen').disabled = false;
+    setupPlayerEnded();
+  }
+
+  function proceedToPlay() {
+    setStepState('step-custom-voice', 'done');
+    setStatus('st-custom-voice', 'Done', 'done');
+    setStepState('step-play', 'active');
+    setStatus('st-play', 'Ready', 'active');
+    document.getElementById('btn-play').disabled = false;
+    document.getElementById('btn-regen').style.display = 'inline-flex';
+    document.getElementById('btn-regen').disabled = false;
+    setupPlayerEnded();
+  }
+
+  // ── Step 5: Play ──────────────────────────────────
 
   // ── Background music helpers ──────────────────────
   let _bgmEmotion = null;

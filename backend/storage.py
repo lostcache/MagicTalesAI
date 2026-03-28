@@ -84,6 +84,13 @@ async def save_segment_audio(story_id: str, index: int, wav_bytes: bytes) -> Non
         await asyncio.to_thread(blob.upload_from_string, wav_bytes, content_type="audio/wav")
 
 
+async def delete_segment_audio(story_id: str, index: int) -> None:
+    """Deletes a cached segment WAV from GCS so it regenerates on next play."""
+    blob = _get_blob(f"{story_id}/audio_{index}.wav")
+    if blob and await asyncio.to_thread(blob.exists):
+        await asyncio.to_thread(blob.delete)
+
+
 async def has_music(story_id: str, emotion: str) -> bool:
     blob = _get_blob(f"{story_id}/music_{emotion}.mp3")
     if not blob:

@@ -8,7 +8,7 @@ from google.genai.errors import APIError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from .gemini_client import _client
-from .models import ExtractionResult, StorySegment, VoiceAssignmentResult
+from .models import CharacterVoiceAssignment, ExtractionResult, StorySegment, VoiceAssignmentResult
 
 TTS_MODEL = "gemini-2.5-flash-preview-tts"
 SAMPLE_RATE = 24000
@@ -105,26 +105,34 @@ async def generate_segment_audio(
 ) -> bytes:
     """
     Generates audio for a specific story segment.
-    
+
     1. Identifies the speaker for the segment.
-    2. Looks up the assigned voice for that speaker (case-insensitive).
-    3. Defaults to 'Aoede' (Narrator) if no voice is found.
-    4. Generates PCM audio and wraps it in a WAV container.
+    2. Looks up the full voice assignment for that speaker (case-insensitive).
+    3. If the assignment has an elevenlabs_voice_id, uses ElevenLabs TTS.
+    4. Otherwise uses Gemini TTS, defaulting to 'Aoede' (Narrator) if not found.
+    5. Returns audio wrapped in a WAV container.
     """
     if index < 0 or index >= len(extraction.segments):
         raise ValueError(f"Segment index {index} out of bounds.")
 
     seg = extraction.segments[index]
-    
-    # Build a normalized mapping of character names to their assigned voices.
-    # We use .strip().lower() to handle inconsistencies in character extraction casing.
-    voice_map: Dict[str, str] = {
-        a.character_name.strip().lower(): a.voice_name.value for a in voices.assignments
-    }
-    
-    # Retrieve the voice, falling back to the default Narrator voice.
-    voice = voice_map.get(seg.speaker.strip().lower(), "Aoede")
 
+    # Build a normalized mapping of character names to their full assignment objects.
+    assignment_map: Dict[str, CharacterVoiceAssignment] = {
+        a.character_name.strip().lower(): a for a in voices.assignments
+    }
+    assignment = assignment_map.get(seg.speaker.strip().lower())
+
+    # Route to ElevenLabs TTS if a custom voice is assigned.
+    if assignment and assignment.elevenlabs_voice_id:
+        from .elevenlabs_client import tts_elevenlabs
+        pcm_data = await tts_elevenlabs(assignment.elevenlabs_voice_id, seg.text)
+        if not pcm_data:
+            return b""
+        return _pcm_to_wav(pcm_data, SAMPLE_RATE)
+
+    # Gemini TTS path — fall back to 'Aoede' (Narrator) if no assignment found.
+    voice = assignment.voice_name.value if assignment else "Aoede"
     pcm_data, rate = await _generate_segment(seg, voice)
     if not pcm_data:
         return b""
