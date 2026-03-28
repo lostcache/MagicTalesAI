@@ -298,6 +298,8 @@ export function useLiveQA({ storyId, audiobookRef, bgmRef }: UseLiveQAOptions) {
         if (!heardReplyRef.current) {
           heardReplyRef.current = true;
           setStatus("replying");
+          // Pause story/BGM when model speaks (not only on mic barge-in), so resume timers run.
+          maybePauseStoryForQA();
         }
         const pcm = new Int16Array(ev.data);
         const rate = playCtx.sampleRate;
@@ -324,18 +326,33 @@ export function useLiveQA({ storyId, audiobookRef, bgmRef }: UseLiveQAOptions) {
         fail(new Error("WebSocket error"));
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         const wasOpen = wsRef.current === ws;
         wsRef.current = null;
-        if (wasOpen && !expectCloseRef.current) {
+        const normalClose = ev.code === 1000 || ev.code === 1001;
+        if (wasOpen && !expectCloseRef.current && !normalClose) {
           setStatus("error");
           setStatusDetail("Live Q&A disconnected.");
+        } else if (wasOpen && !expectCloseRef.current && normalClose) {
+          setStatus("idle");
+          setStatusDetail(null);
         }
         expectCloseRef.current = false;
         teardownLiveMediaOnly();
+        // Teardown clears resume timers; if the socket closed right after the reply, resume here.
+        if (pausedAudiobookRef.current) {
+          pausedAudiobookRef.current = false;
+          const ap = audiobookRef.current;
+          if (ap?.paused) void ap.play().catch(() => {});
+        }
+        if (pausedBgmRef.current) {
+          const bgm = bgmRef.current;
+          if (bgm?.src) void bgm.play().catch(() => {});
+          pausedBgmRef.current = false;
+        }
       };
     });
-  }, [storyId, maybeBargeInFromMic, scheduleResumeAudiobookAfterLiveReply, teardownLiveMediaOnly]);
+  }, [storyId, maybeBargeInFromMic, maybePauseStoryForQA, scheduleResumeAudiobookAfterLiveReply, teardownLiveMediaOnly]);
 
   return {
     liveQaStatus: status,
