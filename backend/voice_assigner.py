@@ -113,7 +113,7 @@ def _deduplicate(result: VoiceAssignmentResult) -> VoiceAssignmentResult:
                 # All voices in the pool have been used at least once.
                 # Reset the 'used' tracker (keeping Aoede reserved) to start a second round of assignments.
                 used = {GeminiVoice.Aoede.value}
-                next_voice = next(v for v in free if v not in used)
+                next_voice = next((v for v in free if v not in used), free[0])
             
             used.add(next_voice)
             fixed.append(a.model_copy(update={"voice_name": GeminiVoice(next_voice)}))
