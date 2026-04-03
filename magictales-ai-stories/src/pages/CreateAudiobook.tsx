@@ -76,7 +76,9 @@ const CreateAudiobook = () => {
     fetch("/api/stories")
       .then((r) => r.json())
       .then((list) => setSavedStories(list))
-      .catch(() => {});
+      .catch(() => {
+        toast({ variant: "destructive", title: "Backend unavailable", description: "Could not load saved stories. Is the server running?" });
+      });
   }, []);
 
   const processStory = async (text: string, name = filename) => {
