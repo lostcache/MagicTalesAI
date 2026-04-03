@@ -36,12 +36,15 @@ def _spa_index() -> FileResponse | Response:
     return FileResponse(index)
 
 
+import os as _os
+_CORS_ORIGINS = [o.strip() for o in _os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+
 app = FastAPI(title="MagicTales-AI", version="0.1.0")
 app.include_router(live_ws_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
