@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Sparkles, Loader2, ArrowLeft, Upload, BookOpen, Play } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { STORY_LIBRARY } from "@/lib/stories";
 import StoryPlayer from "@/components/StoryPlayer";
 import type { ProcessedStory } from "@/types/story";
 import { Link } from "react-router-dom";
@@ -240,60 +239,14 @@ const CreateAudiobook = () => {
 
         {mode === "select" && (
           <div className="space-y-8 animate-fade-up">
-            {/* Quick Start */}
+            {/* Pick a Story */}
             <div>
               <h2 className="font-display font-bold text-lg text-foreground mb-4">
-                Quick Start — Pick a Story
+                Pick a Story
               </h2>
-              <div className="grid gap-3">
-                {STORY_LIBRARY.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => processStory(s.text, s.title)}
-                    className="flex items-center gap-4 p-4 rounded-2xl border border-border bg-card hover:border-primary/50 hover:shadow-md hover:shadow-primary/5 transition-all text-left group"
-                  >
-                    <span className="text-4xl group-hover:scale-110 transition-transform">
-                      {s.emoji}
-                    </span>
-                    <div>
-                      <p className="font-display font-bold text-foreground">{s.title}</p>
-                      <p className="font-body text-sm text-muted-foreground">{s.description}</p>
-                    </div>
-                    <Sparkles className="w-5 h-5 text-primary ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Divider */}
-            <div className="flex items-center gap-4">
-              <div className="flex-1 h-px bg-border" />
-              <span className="text-sm text-muted-foreground font-body">or</span>
-              <div className="flex-1 h-px bg-border" />
-            </div>
-
-            {/* Upload */}
-            <Button variant="outline" size="lg" className="w-full relative" asChild>
-              <label>
-                <Upload className="w-5 h-5" />
-                Upload
-                <input
-                  type="file"
-                  accept=".txt,.epub,.pdf,text/plain,application/epub+zip,application/pdf"
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                  onChange={handleFileUpload}
-                />
-              </label>
-            </Button>
-
-            {/* Your Stories */}
-            {savedStories.length > 0 && (
-              <>
-                <div className="flex items-center gap-4">
-                  <div className="flex-1 h-px bg-border" />
-                  <span className="text-sm text-muted-foreground font-body">your stories</span>
-                  <div className="flex-1 h-px bg-border" />
-                </div>
+              {savedStories.length === 0 ? (
+                <p className="text-sm text-muted-foreground font-body">No stories yet — upload one below.</p>
+              ) : (
                 <div className="grid gap-3">
                   {savedStories.map((s) => (
                     <button
@@ -320,8 +273,29 @@ const CreateAudiobook = () => {
                     </button>
                   ))}
                 </div>
-              </>
-            )}
+              )}
+            </div>
+
+            {/* Divider */}
+            <div className="flex items-center gap-4">
+              <div className="flex-1 h-px bg-border" />
+              <span className="text-sm text-muted-foreground font-body">or</span>
+              <div className="flex-1 h-px bg-border" />
+            </div>
+
+            {/* Upload */}
+            <Button variant="outline" size="lg" className="w-full relative" asChild>
+              <label>
+                <Upload className="w-5 h-5" />
+                Upload
+                <input
+                  type="file"
+                  accept=".txt,.epub,.pdf,text/plain,application/epub+zip,application/pdf"
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                  onChange={handleFileUpload}
+                />
+              </label>
+            </Button>
           </div>
         )}
 
