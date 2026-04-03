@@ -46,7 +46,7 @@ const VoiceModeSelector = ({ voiceMode, onModeChange, voiceSample, onVoiceSample
       mediaRecorder.start();
       setIsRecording(true);
     } catch {
-      console.error("Mic access denied");
+      setCloneMsg("Microphone access denied.");
     }
   }, [onVoiceSampleChange]);
 

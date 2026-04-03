@@ -109,9 +109,8 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
       // Gemini Live Q&A (AI voice mode): mic → backend WebSocket → spoken reply
       if (voiceMode === "ai" && !liveQaStartedRef.current) {
         liveQaStartedRef.current = true;
-        void startLiveQA().catch((e) => {
+        void startLiveQA().catch(() => {
           liveQaStartedRef.current = false;
-          console.error("Live Q&A:", e);
         });
       }
 
@@ -187,7 +186,7 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
 
   const handleResume = useCallback(() => {
     setIsPaused(false);
-    audioEl.current?.play().catch(console.error);
+    audioEl.current?.play().catch(() => {});
     bgmEl.current?.play().catch(() => {});
   }, []);
 
@@ -246,7 +245,7 @@ const InteractivePlayer = ({ story, voiceMode, voiceSample, onStop }: Interactiv
       };
       mr.start();
       setIsRecording(true);
-    } catch { console.error("Mic denied"); }
+    } catch { setAudioError("Microphone access denied."); }
   }, [safeIndex]);
 
   const stopRecording = useCallback(() => {
